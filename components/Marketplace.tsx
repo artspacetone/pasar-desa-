@@ -4,11 +4,13 @@ import {
   Utensils, Coffee, Leaf, Shirt, Wrench, 
   Image as ImageIcon, Store, Minus, Plus, Star, Heart,
   X, Filter, Tag, MessageCircle, CreditCard, Banknote, CheckCircle, Copy,
-  ScanLine, Camera, ArrowLeft, RefreshCw, Bot
+  ScanLine, Camera, ArrowLeft, RefreshCw, Bot, Loader2
 } from 'lucide-react';
 import StoreAIAssistant from './StoreAIAssistant';
+import { db } from '../lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 
-// Mock Data
+// Mock Categories (Static is fine for categories usually)
 const categories = [
   { id: 'all', name: 'Semua', icon: Store },
   { id: 'makanan', name: 'Makanan', icon: Utensils },
@@ -18,18 +20,10 @@ const categories = [
   { id: 'peralatan', name: 'Peralatan', icon: Wrench },
 ];
 
-const marketProducts = [
-  { id: 1, name: 'Keripik Pisang Manis', store: 'Ratna Snack', phone: '6281234567890', bank: 'BRI 1234-5678-90', price: 15000, stock: 48, category: 'makanan', rating: 4.8, sold: 120, image: null, description: 'Keripik pisang kepok pilihan dengan balutan gula aren asli. Renyah, manis, dan tanpa pengawet.' },
-  { id: 2, name: 'Abon Sapi Original', store: 'Dapur Asep', phone: '6281234567891', bank: 'BCA 0987-6543-21', price: 35000, stock: 12, category: 'makanan', rating: 4.9, sold: 85, image: null, description: 'Abon sapi asli kualitas premium. Cocok untuk lauk pauk praktis keluarga.' },
-  { id: 3, name: 'Kopi Bubuk Robusta', store: 'Kopi Curug', phone: '6281234567892', bank: 'MANDIRI 1111-2222-33', price: 25000, stock: 20, category: 'minuman', rating: 4.7, sold: 200, image: null, description: 'Biji kopi robusta pilihan dari perkebunan lokal Curug Badak. Diroasting dengan tingkat kematangan pas.' },
-  { id: 4, name: 'Bayam Segar Ikat', store: 'Kebun Dewi', phone: '6281234567893', bank: 'COD ONLY', price: 5000, stock: 20, category: 'sayur', rating: 4.9, sold: 50, image: null, description: 'Sayur bayam organik segar, dipetik langsung saat ada pesanan.' },
-  { id: 5, name: 'Kaos Sablon Desa', store: 'Konveksi Maju', phone: '6281234567894', bank: 'BRI 5555-6666-77', price: 75000, stock: 50, category: 'pakaian', rating: 4.5, sold: 30, image: null, description: 'Kaos katun combed 30s dengan desain sablon khas desa wisata Curug Badak.' },
-  { id: 6, name: 'Cangkul Baja', store: 'Pandai Besi Jaya', phone: '6281234567895', bank: 'BCA 8888-9999-00', price: 120000, stock: 5, category: 'peralatan', rating: 5.0, sold: 10, image: null, description: 'Cangkul baja tempa tangan, kuat dan tajam. Cocok untuk pertanian berat.' },
-  { id: 7, name: 'Gula Aren Asli', store: 'Ratna Snack', phone: '6281234567890', bank: 'BRI 1234-5678-90', price: 18000, stock: 30, category: 'makanan', rating: 4.8, sold: 150, image: null, description: 'Gula aren murni tanpa campuran, wangi dan legit.' },
-  { id: 8, name: 'Jahe Merah Instan', store: 'Kopi Curug', phone: '6281234567892', bank: 'MANDIRI 1111-2222-33', price: 20000, stock: 15, category: 'minuman', rating: 4.6, sold: 60, image: null, description: 'Minuman serbuk jahe merah instan, tinggal seduh. Hangat dan menyehatkan.' },
-];
-
 const Marketplace: React.FC = () => {
+  const [marketProducts, setMarketProducts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
@@ -53,23 +47,54 @@ const Marketplace: React.FC = () => {
   const [buyerDetails, setBuyerDetails] = useState({ name: 'Siti Aminah', address: 'RT 03 RW 05, Desa Curug Badak', note: '' });
   const [generatedOrderId, setGeneratedOrderId] = useState('');
 
+  // --- FETCH DATA FROM FIREBASE ---
+  useEffect(() => {
+    // Subscribe to products collection
+    const unsubscribe = onSnapshot(collection(db, "products"), (snapshot) => {
+      const fetchedProducts = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name,
+          store: data.shopName, // Mapping shopName to store used in component
+          price: data.price,
+          stock: data.stock,
+          category: data.category?.toLowerCase(), // Ensure lowercase for filter
+          status: data.status,
+          // Defaults for fields that might not be in DB yet
+          phone: data.phone || '6281234567890',
+          bank: data.bank || 'BRI 1234-5678-90',
+          rating: data.rating || 4.5,
+          sold: data.sold || 0,
+          description: data.description || 'Deskripsi produk belum tersedia.'
+        };
+      });
+      // Filter out 'Disembunyikan' products for public view
+      setMarketProducts(fetchedProducts.filter(p => p.status !== 'Disembunyikan'));
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+
   // Filter Logic
   const filteredProducts = useMemo(() => {
     return marketProducts.filter(product => {
-      const matchesCategory = activeCategory === 'all' || product.category === activeCategory;
+      const matchesCategory = activeCategory === 'all' || product.category === activeCategory.toLowerCase();
       const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                            product.store.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesStore = activeStore ? product.store === activeStore : true;
       
       return matchesCategory && matchesSearch && matchesStore;
     });
-  }, [activeCategory, searchQuery, activeStore]);
+  }, [marketProducts, activeCategory, searchQuery, activeStore]);
 
   // Retrieve current store info (phone, etc) from the first product found
   const activeStoreInfo = useMemo(() => {
     if (!activeStore) return null;
     return marketProducts.find(p => p.store === activeStore);
-  }, [activeStore]);
+  }, [activeStore, marketProducts]);
 
   // --- CAMERA LOGIC ---
   const startCamera = async () => {
@@ -106,7 +131,6 @@ const Marketplace: React.FC = () => {
       stopCamera();
       setSelectedProduct(randomProduct);
       setQty(1);
-      // alert(`Produk ditemukan: ${randomProduct.name}`);
     }, 1500);
   };
 
@@ -166,6 +190,7 @@ const Marketplace: React.FC = () => {
     const newOrderId = `ORD-${Math.floor(1000 + Math.random() * 9000)}`;
     setGeneratedOrderId(newOrderId);
     setCheckoutStep('success');
+    // NOTE: In a real app, you would addDoc to an 'orders' collection in Firestore here.
   };
 
   // 4. Final Confirmation (Send to WA)
@@ -383,7 +408,12 @@ const Marketplace: React.FC = () => {
             )}
           </div>
           
-          {filteredProducts.length > 0 ? (
+          {loading ? (
+             <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-2">
+                <Loader2 size={32} className="animate-spin text-blue-600" />
+                <p>Memuat produk...</p>
+             </div>
+          ) : filteredProducts.length > 0 ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredProducts.map((product) => (
                 <div 

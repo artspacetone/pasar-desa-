@@ -1,23 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, Plus, Edit, EyeOff, Filter, 
   Trash2, Eye, Save, X, Package, 
-  Store, Tag, AlertCircle, CheckCircle 
+  Store, Tag, AlertCircle, CheckCircle, Loader2 
 } from 'lucide-react';
 import { Product } from '../types';
-
-// Initial Mock Data
-const initialProducts: Product[] = [
-  { id: '1', name: 'Keripik Pisang Manis', shopName: 'Ratna Snack', price: 15000, stock: 48, status: 'Aktif', category: 'Makanan' },
-  { id: '2', name: 'Abon Sapi Original', shopName: 'Dapur Asep', price: 35000, stock: 12, status: 'Aktif', category: 'Makanan' },
-  { id: '3', name: 'Kopi Bubuk Robusta', shopName: 'Kopi Curug', price: 25000, stock: 0, status: 'Habis', category: 'Minuman' },
-  { id: '4', name: 'Sayur Bayam Segar', shopName: 'Kebun Dewi', price: 5000, stock: 20, status: 'Aktif', category: 'Sayuran' },
-  { id: '5', name: 'Sambal Terasi Botol', shopName: 'Dapur Asep', price: 12000, stock: 30, status: 'Disembunyikan', category: 'Makanan' },
-  { id: '6', name: 'Kaos Sablon Desa', shopName: 'Konveksi Maju', price: 75000, stock: 50, status: 'Aktif', category: 'Pakaian' },
-];
+import { db } from '../lib/firebase';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 
 const ProductManagement: React.FC = () => {
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('Semua Kategori');
   
@@ -25,6 +18,21 @@ const ProductManagement: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [currentProduct, setCurrentProduct] = useState<Partial<Product>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
+  // 1. READ DATA (Real-time Listener)
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, "products"), (snapshot) => {
+      const productsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Product[];
+      setProducts(productsData);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // CRUD Logic
   const filteredProducts = useMemo(() => {
@@ -43,7 +51,8 @@ const ProductManagement: React.FC = () => {
       status: 'Aktif',
       category: 'Makanan',
       stock: 0,
-      price: 0
+      price: 0,
+      shopName: 'BUMDes Curug Badak' // Default value
     });
     setIsModalOpen(true);
   };
@@ -54,23 +63,37 @@ const ProductManagement: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleDeleteClick = (id: string) => {
+  // 2. DELETE DATA
+  const handleDeleteClick = async (id: string) => {
     if (window.confirm('Apakah Anda yakin ingin menghapus produk ini? Tindakan ini tidak dapat dibatalkan.')) {
-      setProducts(products.filter(p => p.id !== id));
+      try {
+        await deleteDoc(doc(db, "products", id));
+      } catch (error) {
+        console.error("Error deleting doc: ", error);
+        alert("Gagal menghapus produk.");
+      }
     }
   };
 
-  const handleToggleStatus = (product: Product) => {
+  // 3. UPDATE STATUS
+  const handleToggleStatus = async (product: Product) => {
     const newStatus = product.status === 'Disembunyikan' ? 'Aktif' : 'Disembunyikan';
-    // If stock is 0, keep/force it as 'Habis' unless user is hiding it
     const finalStatus = (product.stock === 0 && newStatus === 'Aktif') ? 'Habis' : newStatus;
     
-    setProducts(products.map(p => p.id === product.id ? { ...p, status: finalStatus } : p));
+    try {
+      await updateDoc(doc(db, "products", product.id), {
+        status: finalStatus
+      });
+    } catch (error) {
+      console.error("Error updating status: ", error);
+    }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // 4. CREATE / UPDATE DATA
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentProduct.name || !currentProduct.shopName) return;
+    setIsSaving(true);
 
     // Logic to determine status based on stock if currently Active
     let finalStatus = currentProduct.status;
@@ -80,17 +103,28 @@ const ProductManagement: React.FC = () => {
       finalStatus = 'Aktif';
     }
 
-    if (isEditing && currentProduct.id) {
-      setProducts(products.map(p => p.id === currentProduct.id ? { ...currentProduct, status: finalStatus } as Product : p));
-    } else {
-      const newProduct: Product = {
-        ...(currentProduct as Product),
-        id: Date.now().toString(),
-        status: finalStatus as any
-      };
-      setProducts([...products, newProduct]);
+    try {
+      if (isEditing && currentProduct.id) {
+        // Update Existing
+        const productRef = doc(db, "products", currentProduct.id);
+        const { id, ...dataToUpdate } = currentProduct; // Remove ID from data payload
+        await updateDoc(productRef, { ...dataToUpdate, status: finalStatus });
+      } else {
+        // Create New
+        await addDoc(collection(db, "products"), {
+          ...currentProduct,
+          status: finalStatus,
+          sold: 0, // Initialize sold count
+          rating: 0 // Initialize rating
+        });
+      }
+      setIsModalOpen(false);
+    } catch (error) {
+      console.error("Error saving document: ", error);
+      alert("Gagal menyimpan data.");
+    } finally {
+      setIsSaving(false);
     }
-    setIsModalOpen(false);
   };
 
   // Get unique categories for filter
@@ -141,122 +175,123 @@ const ProductManagement: React.FC = () => {
 
         {/* Table */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 border-b border-slate-100">
-              <tr>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Info Produk</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Toko / UMKM</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Harga</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Stok & Kategori</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Aksi</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filteredProducts.length > 0 ? (
-                filteredProducts.map((product) => (
-                  <tr key={product.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200">
-                          <Package size={20} />
+          {loading ? (
+             <div className="p-12 flex justify-center items-center text-slate-400 gap-2">
+                <Loader2 size={24} className="animate-spin" />
+                <span>Memuat data dari database...</span>
+             </div>
+          ) : (
+            <table className="w-full text-left">
+              <thead className="bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Info Produk</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Toko / UMKM</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Harga</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Stok & Kategori</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filteredProducts.length > 0 ? (
+                  filteredProducts.map((product) => (
+                    <tr key={product.id} className="hover:bg-blue-50/30 transition-colors group">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200">
+                            <Package size={20} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-slate-800">{product.name}</p>
+                            <p className="text-xs text-slate-500 font-mono">ID: {product.id.substring(0,6)}...</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-800">{product.name}</p>
-                          <p className="text-xs text-slate-500">ID: #{product.id}</p>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center gap-2 text-slate-600">
+                          <Store size={14} className="text-slate-400" />
+                          <span className="text-sm font-medium">{product.shopName}</span>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2 text-slate-600">
-                        <Store size={14} className="text-slate-400" />
-                        <span className="text-sm font-medium">{product.shopName}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm font-bold text-blue-600">
-                        Rp {product.price.toLocaleString('id-ID')}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex flex-col gap-1">
-                        <span className={`text-xs font-medium ${product.stock < 10 ? 'text-red-500' : 'text-slate-600'}`}>
-                          {product.stock} unit
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="text-sm font-bold text-blue-600">
+                          Rp {product.price.toLocaleString('id-ID')}
                         </span>
-                        <span className="inline-flex w-fit items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                          <Tag size={10} />
-                          {product.category}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex flex-col gap-1">
+                          <span className={`text-xs font-medium ${product.stock < 10 ? 'text-red-500' : 'text-slate-600'}`}>
+                            {product.stock} unit
+                          </span>
+                          <span className="inline-flex w-fit items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                            <Tag size={10} />
+                            {product.category}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 w-fit ${
+                          product.status === 'Aktif' ? 'bg-green-100 text-green-700' :
+                          product.status === 'Habis' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-500'
+                        }`}>
+                          {product.status === 'Aktif' && <CheckCircle size={12} />}
+                          {product.status === 'Habis' && <AlertCircle size={12} />}
+                          {product.status === 'Disembunyikan' && <EyeOff size={12} />}
+                          {product.status}
                         </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 w-fit ${
-                        product.status === 'Aktif' ? 'bg-green-100 text-green-700' :
-                        product.status === 'Habis' ? 'bg-red-100 text-red-700' :
-                        'bg-slate-100 text-slate-500'
-                      }`}>
-                        {product.status === 'Aktif' && <CheckCircle size={12} />}
-                        {product.status === 'Habis' && <AlertCircle size={12} />}
-                        {product.status === 'Disembunyikan' && <EyeOff size={12} />}
-                        {product.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className="flex items-center justify-end gap-2 opacity-80 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={() => handleToggleStatus(product)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            product.status === 'Disembunyikan' 
-                              ? 'text-slate-400 hover:text-green-600 hover:bg-green-50' 
-                              : 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
-                          }`}
-                          title={product.status === 'Disembunyikan' ? 'Tampilkan Produk' : 'Sembunyikan Produk'}
-                        >
-                          {product.status === 'Disembunyikan' ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                        
-                        <button 
-                          onClick={() => handleEditClick(product)}
-                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" 
-                          title="Edit Produk"
-                        >
-                          <Edit size={16} />
-                        </button>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <div className="flex items-center justify-end gap-2 opacity-80 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => handleToggleStatus(product)}
+                            className={`p-2 rounded-lg transition-colors ${
+                              product.status === 'Disembunyikan' 
+                                ? 'text-slate-400 hover:text-green-600 hover:bg-green-50' 
+                                : 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
+                            }`}
+                            title={product.status === 'Disembunyikan' ? 'Tampilkan Produk' : 'Sembunyikan Produk'}
+                          >
+                            {product.status === 'Disembunyikan' ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                          
+                          <button 
+                            onClick={() => handleEditClick(product)}
+                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" 
+                            title="Edit Produk"
+                          >
+                            <Edit size={16} />
+                          </button>
 
-                        <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                          <div className="h-4 w-px bg-slate-200 mx-1"></div>
 
-                        <button 
-                          onClick={() => handleDeleteClick(product.id)}
-                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" 
-                          title="Hapus Produk"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                          <button 
+                            onClick={() => handleDeleteClick(product.id)}
+                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" 
+                            title="Hapus Produk"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center justify-center text-slate-400">
+                        <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                          <Package size={24} />
+                        </div>
+                        <p className="text-base font-medium text-slate-600">Produk tidak ditemukan</p>
+                        <p className="text-sm">Silakan tambah produk baru.</p>
                       </div>
                     </td>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="flex flex-col items-center justify-center text-slate-400">
-                      <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
-                        <Package size={24} />
-                      </div>
-                      <p className="text-base font-medium text-slate-600">Produk tidak ditemukan</p>
-                      <p className="text-sm">Coba kata kunci lain atau ubah filter kategori.</p>
-                      <button 
-                        onClick={() => {setSearchQuery(''); setCategoryFilter('Semua Kategori');}}
-                        className="mt-4 text-blue-600 hover:underline text-sm font-medium"
-                      >
-                        Reset Pencarian
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
@@ -368,9 +403,10 @@ const ProductManagement: React.FC = () => {
                 </button>
                 <button 
                   type="submit"
+                  disabled={isSaving}
                   className="flex-1 bg-blue-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
                 >
-                  <Save size={18} />
+                  {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                   Simpan Produk
                 </button>
               </div>
