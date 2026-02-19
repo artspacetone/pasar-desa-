@@ -1,0 +1,7 @@
+{
+  "name": "Marketplace Desa Admin",
+  "description": "Admin dashboard for Marketplace Desa Curug Badak featuring UMKM management, product oversight, order tracking, and village data integration.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
